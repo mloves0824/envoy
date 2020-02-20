@@ -25,26 +25,22 @@ public:                                                                         
   void append##name(absl::string_view data, absl::string_view delimiter) override {                \
     HeaderEntry& entry = maybeCreateInline(&inline_headers_.name##_, Headers::get().name);         \
     addSize(HeaderMapImpl::appendToHeader(entry.value(), data, delimiter));                        \
-    verifyByteSize();                                                                              \
   }                                                                                                \
   void setReference##name(absl::string_view value) override {                                      \
     HeaderEntry& entry = maybeCreateInline(&inline_headers_.name##_, Headers::get().name);         \
     updateSize(entry.value().size(), value.size());                                                \
     entry.value().setReference(value);                                                             \
-    verifyByteSize();                                                                              \
   }                                                                                                \
   void set##name(absl::string_view value) override {                                               \
     HeaderEntry& entry = maybeCreateInline(&inline_headers_.name##_, Headers::get().name);         \
     updateSize(entry.value().size(), value.size());                                                \
     entry.value().setCopy(value);                                                                  \
-    verifyByteSize();                                                                              \
   }                                                                                                \
   void set##name(uint64_t value) override {                                                        \
     HeaderEntry& entry = maybeCreateInline(&inline_headers_.name##_, Headers::get().name);         \
     subtractSize(inline_headers_.name##_->value().size());                                         \
     entry.value().setInteger(value);                                                               \
     addSize(inline_headers_.name##_->value().size());                                              \
-    verifyByteSize();                                                                              \
   }                                                                                                \
   void remove##name() override { removeInline(&inline_headers_.name##_); }
 
@@ -61,7 +57,6 @@ public:                                                                         
  */
 class HeaderMapImpl : public virtual HeaderMap, NonCopyable {
 public:
-  HeaderMapImpl();
   // The following "constructors" call virtual functions during construction and must use the
   // static factory pattern.
   static void copyFrom(HeaderMapImpl& lhs, const HeaderMap& rhs);
@@ -124,16 +119,23 @@ protected:
     HeaderEntryImpl** entry_;
     const LowerCaseString* key_;
   };
-  using EntryCb = StaticLookupResponse (*)(HeaderMapImpl&);
-  struct StaticLookupTable : public TrieLookupTable<EntryCb> {
+  /**
+   * fixfix
+   */
+  template <class T>
+  struct StaticLookupTable : public TrieLookupTable<StaticLookupResponse (*)(T&)> {
+    using HeaderMapType = T;
+
     StaticLookupTable();
-  };
-  virtual const StaticLookupTable& staticLookupTable() const;
 
-  struct AllInlineHeaders {
-    void clear() { memset(this, 0, sizeof(*this)); }
-
-    ALL_INLINE_HEADERS(DEFINE_INLINE_HEADER_STRUCT)
+    static absl::optional<StaticLookupResponse> lookup(T& header_map, absl::string_view key) {
+      auto entry = ConstSingleton<StaticLookupTable>::get().find(key);
+      if (entry != nullptr) {
+        return entry(header_map);
+      } else {
+        return absl::nullopt;
+      }
+    }
   };
 
   /**
@@ -216,32 +218,98 @@ protected:
   void updateSize(uint64_t from_size, uint64_t to_size);
   void addSize(uint64_t size);
   void subtractSize(uint64_t size);
+  virtual absl::optional<StaticLookupResponse> staticLookup(absl::string_view) {
+    // TODO(mattklein123): Make this pure once HeaderMapImpl is a base class only.
+    return absl::nullopt;
+  }
+  virtual void clearInline() {
+    // TODO(mattklein123): Make this pure once HeaderMapImpl is a base class only.
+  }
 
-  AllInlineHeaders inline_headers_;
   HeaderList headers_;
   // This holds the internal byte size of the HeaderMap.
   uint64_t cached_byte_size_ = 0;
-  ALL_INLINE_HEADERS(DEFINE_INLINE_HEADER_FUNCS)
-
-  // Needed so RequestHeaderStaticLookupTable can interact with inline_headers_.
-  friend class RequestHeaderMapImpl;
 };
 
 /**
  * Typed derived classes for all header map types.
- * TODO(mattklein123): In future changes we will be differentiating the implementation between
- * these classes to both fix bugs and improve performance.
  */
 class RequestHeaderMapImpl : public HeaderMapImpl, public RequestHeaderMap {
+public:
+  INLINE_REQ_HEADERS(DEFINE_INLINE_HEADER_FUNCS)
+  INLINE_REQ_RESP_HEADERS(DEFINE_INLINE_HEADER_FUNCS)
+
 protected:
-  struct RequestHeaderStaticLookupTable : public StaticLookupTable {
-    RequestHeaderStaticLookupTable();
+  // fixfix
+  struct AllInlineHeaders {
+    AllInlineHeaders() { clear(); }
+    void clear() { memset(this, 0, sizeof(*this)); }
+
+    INLINE_REQ_HEADERS(DEFINE_INLINE_HEADER_STRUCT)
+    INLINE_REQ_RESP_HEADERS(DEFINE_INLINE_HEADER_STRUCT)
   };
-  const StaticLookupTable& staticLookupTable() const override;
+
+  absl::optional<StaticLookupResponse> staticLookup(absl::string_view key) override {
+    return StaticLookupTable<RequestHeaderMapImpl>::lookup(*this, key);
+  }
+  void clearInline() override { inline_headers_.clear(); }
+
+  AllInlineHeaders inline_headers_;
+
+  friend class HeaderMapImpl;
 };
+
 class RequestTrailerMapImpl : public HeaderMapImpl, public RequestTrailerMap {};
-class ResponseHeaderMapImpl : public HeaderMapImpl, public ResponseHeaderMap {};
-class ResponseTrailerMapImpl : public HeaderMapImpl, public ResponseTrailerMap {};
+
+class ResponseHeaderMapImpl : public HeaderMapImpl, public ResponseHeaderMap {
+public:
+  INLINE_RESP_HEADERS(DEFINE_INLINE_HEADER_FUNCS)
+  INLINE_REQ_RESP_HEADERS(DEFINE_INLINE_HEADER_FUNCS)
+  INLINE_RESP_HEADERS_TRAILERS(DEFINE_INLINE_HEADER_FUNCS)
+
+protected:
+  // fixfix
+  struct AllInlineHeaders {
+    AllInlineHeaders() { clear(); }
+    void clear() { memset(this, 0, sizeof(*this)); }
+
+    INLINE_RESP_HEADERS(DEFINE_INLINE_HEADER_STRUCT)
+    INLINE_REQ_RESP_HEADERS(DEFINE_INLINE_HEADER_STRUCT)
+    INLINE_RESP_HEADERS_TRAILERS(DEFINE_INLINE_HEADER_STRUCT)
+  };
+
+  absl::optional<StaticLookupResponse> staticLookup(absl::string_view key) override {
+    return StaticLookupTable<ResponseHeaderMapImpl>::lookup(*this, key);
+  }
+  void clearInline() override { inline_headers_.clear(); }
+
+  AllInlineHeaders inline_headers_;
+
+  friend class HeaderMapImpl;
+};
+
+class ResponseTrailerMapImpl : public HeaderMapImpl, public ResponseTrailerMap {
+public:
+  INLINE_RESP_HEADERS_TRAILERS(DEFINE_INLINE_HEADER_FUNCS)
+
+protected:
+  // fixfix
+  struct AllInlineHeaders {
+    AllInlineHeaders() { clear(); }
+    void clear() { memset(this, 0, sizeof(*this)); }
+
+    INLINE_RESP_HEADERS_TRAILERS(DEFINE_INLINE_HEADER_STRUCT)
+  };
+
+  absl::optional<StaticLookupResponse> staticLookup(absl::string_view key) override {
+    return StaticLookupTable<ResponseTrailerMapImpl>::lookup(*this, key);
+  }
+  void clearInline() override { inline_headers_.clear(); }
+
+  AllInlineHeaders inline_headers_;
+
+  friend class HeaderMapImpl;
+};
 
 template <class T>
 std::unique_ptr<T>

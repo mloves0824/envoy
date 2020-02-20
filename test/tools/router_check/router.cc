@@ -44,7 +44,8 @@ ToolConfig ToolConfig::create(const envoy::RouterCheckToolSchema::ValidationItem
 ToolConfig::ToolConfig(std::unique_ptr<Http::TestRequestHeaderMapImpl> request_headers,
                        int random_value)
     : request_headers_(std::move(request_headers)),
-      response_headers_(std::make_unique<Http::TestResponseHeaderMapImpl>()), random_value_(random_value) {}
+      response_headers_(std::make_unique<Http::TestResponseHeaderMapImpl>()),
+      random_value_(random_value) {}
 
 // static
 RouterCheckTool RouterCheckTool::create(const std::string& router_config_file,
